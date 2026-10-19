@@ -5,7 +5,10 @@
 #   nkit-to-rvz-to-trrntzip start            run in the background (survives closing VS Code)
 #   nkit-to-rvz-to-trrntzip status | log     check on the background job
 #   nkit-to-rvz-to-trrntzip stop             stop it (safe; a rerun resumes where it left off)
-#   nkit-to-rvz-to-trrntzip run [--limit N] [--retry-failed]   run in this terminal
+#   nkit-to-rvz-to-trrntzip run [--jobs N] [--limit N] [--retry-failed]   run in this terminal
+#
+# Up to JOBS archives (default 3) are worked on at once, each in its own work folder, so one
+# can be zipping while others are still in NKit.
 #
 # Only discs that NKit verifies against the Redump DAT are zipped. Everything is recorded in
 # $STATE_DIR/ledger.tsv, and archives already marked done (or failed) are skipped on reruns.
@@ -20,6 +23,7 @@ DAT="${DAT:-/var/home/LiamBox/repos/igir/nkit-2-rvz-2-trrntzip/Nintendo - Wii - 
 IGIR_DIR="${IGIR_DIR:-/var/home/LiamBox/repos/igir}"
 FORMAT="${FORMAT:-rvz:zstd:19:128k:4}"
 MIN_FREE_GB="${MIN_FREE_GB:-20}"
+JOBS="${JOBS:-3}"
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/nkit-to-rvz-to-trrntzip}"
 UNIT="nkit-to-rvz-to-trrntzip"
 CONTAINER="${CONTAINER:-MyFedora}"
@@ -27,7 +31,8 @@ CONTAINER="${CONTAINER:-MyFedora}"
 LEDGER="$STATE_DIR/ledger.tsv"
 RUN_LOG="$STATE_DIR/run.log"
 NKIT_LOGS="$STATE_DIR/nkit-logs"
-WORK="$MIDDLE/.work"
+WORK_ROOT="$MIDDLE/.work"
+LOCKS="$STATE_DIR/locks"
 
 # Run a command on the host, whether we're in the distrobox, the VS Code Flatpak, or the host
 host() {
@@ -74,8 +79,8 @@ if crc != entries[0].CRC:
 EOF
 }
 
-process_archive() { # archive path
-  local archive="$1" name nkit_log rvzs rvz game zip
+process_archive() { # archive path, worker slot
+  local archive="$1" WORK="$WORK_ROOT/$2" name nkit_log rvzs rvz game zip
   name="$(basename "$archive")"
   nkit_log="$NKIT_LOGS/${name}.log"
 
@@ -105,6 +110,12 @@ process_archive() { # archive path
   game="$(basename "$rvz" .rvz)"
   zip="$DEST/$game.zip"
 
+  # Workers run side by side, so two archives of the same disc could reach this point together;
+  # hold a per-game lock until the zip is finished and checked
+  local lock_fd
+  exec {lock_fd}>"$LOCKS/$game.lock"
+  flock "$lock_fd"
+
   # Two archives can be the same Redump disc; keep the first one's zip. A zip that doesn't match
   # (e.g. left half-written by a stopped run) is replaced.
   if [[ -e "$zip" ]]; then
@@ -119,7 +130,7 @@ process_archive() { # archive path
   fi
 
   # 2. igir: wrap the untouched .rvz in a TorrentZip
-  if ! (cd "$IGIR_DIR" && npx --no-install tsx index.ts copy zip --input-raw-disc-images \
+  if ! (cd "$IGIR_DIR" && npx --no-install tsx index.ts copy zip --input-raw-disc-images --disable-cache \
     --input "$WORK" --output "$DEST") >>"$nkit_log" 2>&1; then
     rm -rf "$WORK"
     rm -f "$zip"
@@ -148,16 +159,19 @@ cmd_run() {
     case "$1" in
       --limit) limit="$2"; shift 2 ;;
       --retry-failed) retry_failed=1; shift ;;
+      --jobs) JOBS="$2"; shift 2 ;;
       *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
   done
 
-  mkdir -p "$STATE_DIR" "$NKIT_LOGS"
+  [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "--jobs must be a positive number" >&2; exit 2; }
+  mkdir -p "$STATE_DIR" "$NKIT_LOGS" "$LOCKS"
   exec 9>"$STATE_DIR/lock"
   if ! flock -n 9; then
     echo "another run is already in progress" >&2
     exit 1
   fi
+  echo "$$" >"$STATE_DIR/pid" # 'stop' signals this process group
 
   # Never create these directories ourselves: if a drive isn't mounted, stop instead
   local dir
@@ -172,9 +186,19 @@ cmd_run() {
 
   local archives=() archive
   mapfile -t archives < <(find "$ORIGIN" -maxdepth 1 -type f \( -iname '*.7z' -o -iname '*.zip' \) | sort)
-  log "START  ${#archives[@]} archives in origin, format $FORMAT"
+  log "START  ${#archives[@]} archives in origin, format $FORMAT, $JOBS at a time"
 
-  local processed=0 total_done=0 total_failed=0
+  # Leftovers from a stopped run are never valid; each worker gets a fresh folder below this
+  rm -rf "$WORK_ROOT" && mkdir -p "$WORK_ROOT"
+
+  # Ctrl+C or 'stop' must take the workers down too, not leave them running unattended
+  trap 'trap "" INT TERM; kill 0 2>/dev/null; exit 130' INT TERM
+
+  local processed=0 total_done=0 total_failed=0 slot pid
+  local -A slot_of_pid=()
+  local free_slots=()
+  for ((slot = 1; slot <= JOBS; slot++)); do free_slots+=("$slot"); done
+
   for archive in "${archives[@]}"; do
     if ledger_has "$(basename "$archive")" "$skip_statuses"; then
       continue
@@ -182,16 +206,29 @@ cmd_run() {
     if [[ $limit -gt 0 && $processed -ge $limit ]]; then
       break
     fi
+    # Wait for a free worker slot
+    if [[ ${#free_slots[@]} -eq 0 ]]; then
+      wait -n -p pid "${!slot_of_pid[@]}"
+      free_slots+=("${slot_of_pid[$pid]}")
+      unset "slot_of_pid[$pid]"
+    fi
+    # Workers still running can each use up to ~10 GB more (a dual-layer disc)
+    local need=$((MIN_FREE_GB + 10 * ${#slot_of_pid[@]}))
     for dir in "$MIDDLE" "$DEST"; do
-      if [[ $(free_gb "$dir") -lt $MIN_FREE_GB ]]; then
-        log "ABORT  less than ${MIN_FREE_GB} GB free on $dir"
+      if [[ $(free_gb "$dir") -lt $need ]]; then
+        log "ABORT  less than $need GB free on $dir; letting running workers finish"
+        wait
         exit 1
       fi
     done
-    log "BEGIN $(basename "$archive")"
-    process_archive "$archive"
+    slot="${free_slots[0]}"
+    free_slots=("${free_slots[@]:1}")
+    log "BEGIN $(basename "$archive")  [worker $slot]"
+    process_archive "$archive" "$slot" &
+    slot_of_pid[$!]="$slot"
     processed=$((processed + 1))
   done
+  wait
 
   total_done="$(awk -F'\t' '$2 == "done"' "$LEDGER" 2>/dev/null | cut -f1 | sort -u | wc -l)"
   total_failed="$(awk -F'\t' '$2 == "failed"' "$LEDGER" 2>/dev/null | cut -f1 | sort -u | wc -l)"
@@ -202,7 +239,7 @@ cmd_start() {
   host systemd-run --user --unit="$UNIT" --collect \
     --description="NKit -> RVZ -> TorrentZip" \
     systemd-inhibit --what=sleep:idle --who="$UNIT" --why="Converting Wii discs" \
-    distrobox enter "$CONTAINER" -- bash -lc "$(printf '%q ' "$(realpath "$0")" run "$@")" ||
+    distrobox enter "$CONTAINER" -- bash -lc "exec setsid -w $(printf '%q ' "$(realpath "$0")" run "$@")" ||
     return 1
 
   # Catch jobs that die straight away, instead of failing silently in the background
@@ -215,6 +252,19 @@ cmd_start() {
     return 1
   fi
   echo "Started in the background. Check on it with: $0 status"
+}
+
+cmd_stop() {
+  host systemctl --user stop "$UNIT"
+  # Stopping the unit doesn't reach the processes inside the distrobox, so signal the run's own
+  # process group (the container shares the host's PIDs). Check it's still ours, PIDs get reused.
+  local pid
+  pid="$(cat "$STATE_DIR/pid" 2>/dev/null)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] &&
+    host ps -o args= -p "$pid" 2>/dev/null | grep -q 'nkit-to-rvz-to-trrntzip.* run'; then
+    host kill -TERM -- "-$pid"
+  fi
+  echo "Stopped. Run 'start' again to resume."
 }
 
 cmd_status() {
@@ -237,6 +287,6 @@ case "${1:-}" in
   start) shift; cmd_start "$@" ;;
   status) cmd_status ;;
   log) tail -n "${2:-40}" -F "$RUN_LOG" ;;
-  stop) host systemctl --user stop "$UNIT" && echo "Stopped. Run 'start' again to resume." ;;
-  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  stop) cmd_stop ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
