@@ -202,8 +202,19 @@ cmd_start() {
   host systemd-run --user --unit="$UNIT" --collect \
     --description="NKit -> RVZ -> TorrentZip" \
     systemd-inhibit --what=sleep:idle --who="$UNIT" --why="Converting Wii discs" \
-    distrobox enter "$CONTAINER" -- bash -lc "$(printf '%q ' "$0" run "$@")" &&
-    echo "Started in the background. Check on it with: $(basename "$0") status"
+    distrobox enter "$CONTAINER" -- bash -lc "$(printf '%q ' "$(realpath "$0")" run "$@")" ||
+    return 1
+
+  # Catch jobs that die straight away, instead of failing silently in the background
+  sleep 5
+  if [[ "$(host systemctl --user is-active "$UNIT" 2>/dev/null)" != active ]] &&
+    ! grep -q FINISH <(tail -n 1 "$RUN_LOG" 2>/dev/null); then
+    echo "The background job stopped right after starting. Last messages:" >&2
+    host journalctl --user -u "$UNIT" --since "-1min" --no-pager -o cat 2>/dev/null |
+      grep -v 'container exec' | tail -n 5 >&2
+    return 1
+  fi
+  echo "Started in the background. Check on it with: $0 status"
 }
 
 cmd_status() {
