@@ -584,3 +584,54 @@ describe('single files', () => {
     );
   });
 });
+
+describe('raw disc images', () => {
+  const discImagePaths = [
+    'test/fixtures/roms/chd/*.chd',
+    'test/fixtures/roms/cso/*',
+    'test/fixtures/roms/gcz/*',
+    'test/fixtures/roms/nkit/*',
+    'test/fixtures/roms/rvz/*',
+    'test/fixtures/roms/wia/*',
+  ];
+
+  it('should decompress disc images by default', async () => {
+    const scannedFiles = await createRomScanner(['test/fixtures/roms/rvz/*']).scan();
+    expect(scannedFiles.length).toBeGreaterThan(0);
+    expect(scannedFiles.every((file) => file instanceof ArchiveEntry)).toEqual(true);
+  });
+
+  it('should scan disc images as raw files', async () => {
+    const options = new Options({ input: discImagePaths, inputRawDiscImages: true });
+    const inputFilePaths = await options.scanInputFilesWithoutExclusions();
+
+    const scannedFiles = await new ROMScanner(
+      options,
+      new ProgressBarFake(),
+      new FileFactory(new FileCache()),
+      new MappableSemaphore(os.availableParallelism()),
+    ).scan();
+
+    expect(scannedFiles).toHaveLength(inputFilePaths.length);
+    for (const scannedFile of scannedFiles) {
+      expect(scannedFile).toBeInstanceOf(File);
+      expect(scannedFile).not.toBeInstanceOf(ArchiveEntry);
+      expect(scannedFile.getSize()).toEqual(await FsUtil.size(scannedFile.getFilePath()));
+      expect(scannedFile.getCrc32()).toMatch(/^[0-9a-f]{8}$/);
+    }
+    expect(
+      scannedFiles.map((file) => file.getFilePath()).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(inputFilePaths.toSorted((a, b) => a.localeCompare(b)));
+  });
+
+  it('should still scan other archives normally', async () => {
+    const scannedFiles = await new ROMScanner(
+      new Options({ input: ['test/fixtures/roms/zip/fizzbuzz.zip'], inputRawDiscImages: true }),
+      new ProgressBarFake(),
+      new FileFactory(new FileCache()),
+      new MappableSemaphore(os.availableParallelism()),
+    ).scan();
+    expect(scannedFiles.length).toBeGreaterThan(0);
+    expect(scannedFiles.every((file) => file instanceof ArchiveEntry)).toEqual(true);
+  });
+});

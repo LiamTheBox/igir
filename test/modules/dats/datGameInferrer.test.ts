@@ -158,6 +158,40 @@ test.each([
   expect(datNameToGameNames).toEqual(expected);
 });
 
+it('should infer raw disc images as single-file games, keeping periods in their names', async () => {
+  // Given
+  const options = new Options({
+    input: ['test/fixtures/roms/nkit', 'test/fixtures/roms/rvz', 'test/fixtures/roms/wia'],
+    inputRawDiscImages: true,
+  });
+  const romFiles = await new ROMScanner(
+    options,
+    new ProgressBarFake(),
+    new FileFactory(new FileCache()),
+    new MappableSemaphore(os.availableParallelism()),
+  ).scan();
+
+  // When
+  const dats = await new DATGameInferrer(
+    options,
+    new ProgressBarFake(),
+    new MappableSemaphore(os.availableParallelism()),
+  ).infer(romFiles);
+
+  // Then
+  const datNameToGames = Object.fromEntries(
+    dats.map((dat) => [
+      dat.getName(),
+      dat.getGames().map((game) => [game.getName(), game.getRoms().map((rom) => rom.getName())]),
+    ]),
+  );
+  expect(datNameToGames).toEqual({
+    nkit: [['GameCube-240pSuite-1.19', ['GameCube-240pSuite-1.19.nkit.iso']]],
+    rvz: [['GameCube-240pSuite-1.19', ['GameCube-240pSuite-1.19.rvz']]],
+    wia: [['GameCube-240pSuite-1.19', ['GameCube-240pSuite-1.19.wia']]],
+  });
+});
+
 it('should prefer a recorded ROM name over an invented one, whatever order the files arrive in', async () => {
   const bzip2Entry = await ArchiveEntry.entryOf({
     archive: new Bzip2('foobar.bz2'),

@@ -306,6 +306,12 @@ export default class ArgumentsParser {
         requiresArg: true,
         default: InputChecksumArchivesModeInverted[InputChecksumArchivesMode.AUTO].toLowerCase(),
       })
+      .option('input-raw-disc-images', {
+        group: groupRomInput,
+        description:
+          "Treat compressed disc images (CHD, CSO, RVZ, etc.) as raw files, don't decompress them",
+        type: 'boolean',
+      })
 
       .option('dat', {
         group: groupDatInput,

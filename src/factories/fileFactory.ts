@@ -328,6 +328,15 @@ export default class FileFactory {
       ...Lzma86.getExtensions(),
       ...Split.getExtensions(),
       // Compressed images
+      ...this.getDiscImageExtensions(),
+    ].some((ext) => filePath.toLowerCase().endsWith(ext));
+  }
+
+  /**
+   * Return every extension recognized as a supported compressed disc image format.
+   */
+  static getDiscImageExtensions(): string[] {
+    return [
       ...Cso.getExtensions(),
       ...Dax.getExtensions(),
       ...Zso.getExtensions(),
@@ -336,7 +345,22 @@ export default class FileFactory {
       ...Wia.getExtensions(),
       ...Chd.getExtensions(),
       ...NkitIso.getExtensions(),
-    ].some((ext) => filePath.toLowerCase().endsWith(ext));
+    ];
+  }
+
+  /**
+   * Return the compressed disc image extension the given file path ends with, or undefined if it
+   * doesn't end with one.
+   */
+  static getDiscImageExtension(filePath: string): string | undefined {
+    const lowerFilePath = filePath.toLowerCase();
+    return (
+      this.getDiscImageExtensions()
+        .filter((ext) => lowerFilePath.endsWith(ext))
+        // Prefer the longest match, e.g. ".nkit.iso"
+        .toSorted((a, b) => b.length - a.length)
+        .at(0)
+    );
   }
 
   /**

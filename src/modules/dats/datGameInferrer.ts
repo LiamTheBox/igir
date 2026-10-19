@@ -5,6 +5,7 @@ import { parse } from '@gplane/cue';
 
 import type MappableSemaphore from '../../async/mappableSemaphore.js';
 import type ProgressBar from '../../console/progressBar.js';
+import FileFactory from '../../factories/fileFactory.js';
 import Package from '../../globals/package.js';
 import type DAT from '../../models/dats/dat.js';
 import Disk from '../../models/dats/disk.js';
@@ -254,6 +255,13 @@ export default class DATGameInferrer extends Module {
       const extIdx = fileName.lastIndexOf(file.getArchive().getExtension());
       if (extIdx !== -1) {
         return path.basename(fileName.slice(0, extIdx)).trim();
+      }
+    } else {
+      // If the file is a raw compressed disc image, only slice off its known extension, so that
+      // names containing periods (e.g. version numbers) are kept intact
+      const discImageExtension = FileFactory.getDiscImageExtension(fileName);
+      if (discImageExtension !== undefined) {
+        return path.basename(fileName.slice(0, -discImageExtension.length)).trim();
       }
     }
 

@@ -201,6 +201,7 @@ describe('options', () => {
     expect(options.getInputChecksumMin()).toEqual(ChecksumBitmask.CRC32);
     expect(options.getInputChecksumMax()).toEqual(ChecksumBitmask.SHA1);
     expect(options.getInputChecksumArchives()).toEqual(InputChecksumArchivesMode.AUTO);
+    expect(options.getInputRawDiscImages()).toEqual(false);
 
     expect(options.getDatNameRegex()).toBeUndefined();
     expect(options.getDatNameRegexExclude()).toBeUndefined();
@@ -651,6 +652,27 @@ describe('options', () => {
         ])
         .getInputChecksumArchives(),
     ).toEqual(InputChecksumArchivesMode.NEVER);
+  });
+
+  it('should parse "input-raw-disc-images"', () => {
+    expect(argumentsParser.parse(dummyCommandAndRequiredArgs).getInputRawDiscImages()).toEqual(
+      false,
+    );
+    expect(
+      argumentsParser
+        .parse([...dummyCommandAndRequiredArgs, '--input-raw-disc-images'])
+        .getInputRawDiscImages(),
+    ).toEqual(true);
+    expect(
+      argumentsParser
+        .parse([...dummyCommandAndRequiredArgs, '--input-raw-disc-images', 'true'])
+        .getInputRawDiscImages(),
+    ).toEqual(true);
+    expect(
+      argumentsParser
+        .parse([...dummyCommandAndRequiredArgs, '--input-raw-disc-images', 'false'])
+        .getInputRawDiscImages(),
+    ).toEqual(false);
   });
 
   it('should parse "dat"', async () => {

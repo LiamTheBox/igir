@@ -144,6 +144,17 @@ export default abstract class Scanner extends Module {
         }
       }
 
+      if (
+        this.options.getInputRawDiscImages() &&
+        FileFactory.getDiscImageExtension(filePath) !== undefined
+      ) {
+        // Don't decompress the disc image, treat it as a single opaque file
+        const file = await this.fileFactory.fileFrom(filePath, checksumBitmask, (progress) => {
+          progressBar.setCompleted(progress);
+        });
+        return isNotJunk(file.getFilePath()) ? [file] : [];
+      }
+
       const filesFromPath = await this.fileFactory.filesFrom(
         filePath,
         checksumBitmask,

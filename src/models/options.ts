@@ -166,6 +166,7 @@ export interface OptionsProps {
   readonly inputChecksumMin?: string;
   readonly inputChecksumMax?: string;
   readonly inputChecksumArchives?: string;
+  readonly inputRawDiscImages?: boolean;
 
   readonly dat?: string[];
   readonly datExclude?: string[];
@@ -311,6 +312,8 @@ export default class Options implements OptionsProps {
   readonly inputChecksumMax?: string;
 
   readonly inputChecksumArchives?: string;
+
+  readonly inputRawDiscImages: boolean;
 
   readonly dat: string[];
 
@@ -532,6 +535,7 @@ export default class Options implements OptionsProps {
     this.inputChecksumMin = options?.inputChecksumMin;
     this.inputChecksumMax = options?.inputChecksumMax;
     this.inputChecksumArchives = options?.inputChecksumArchives;
+    this.inputRawDiscImages = options?.inputRawDiscImages ?? false;
 
     this.dat = (options?.dat ?? []).map((filePath) =>
       URLUtil.canParse(filePath) ? filePath : filePath.replaceAll(/[\\/]/g, path.sep),
@@ -1022,6 +1026,10 @@ export default class Options implements OptionsProps {
       return undefined;
     }
     return InputChecksumArchivesMode[checksumMode as InputChecksumArchivesModeKey];
+  }
+
+  getInputRawDiscImages(): boolean {
+    return this.inputRawDiscImages;
   }
 
   /**

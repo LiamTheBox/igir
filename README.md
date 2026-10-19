@@ -96,6 +96,8 @@ ROM input options:
       --input-checksum-archives  Calculate checksums of archive files themselves, allowing
                                  them to match files in DATs
                                         [choices: "never", "auto", "always"] [default: "auto"]
+      --input-raw-disc-images    Treat compressed disc images (CHD, CSO, RVZ, etc.) as raw
+                                 files, don't decompress them                        [boolean]
 
 DAT input options:
   -d, --dat                            Path(s) to DAT files or archives (supports globbing)
